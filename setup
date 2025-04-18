@@ -1,0 +1,201 @@
+#!/bin/zsh
+
+# スクリプトがエラーで停止し、未定義変数を使えず、パイプラインのエラーも検知するように設定
+set -euo pipefail
+
+echo "--- Rails Docker環境構築スクリプト開始 ---"
+
+# --- 1. 必要ファイルの作成 ---
+echo "[1/10] 初期ファイルを作成中... (Dockerfile, Gemfile, Gemfile.lock, docker-compose.yml, .env)"
+touch Dockerfile Gemfile Gemfile.lock docker-compose.yml .env
+
+# --- 1.5 .envファイルの編集 ---
+echo "[2/10] .env ファイルを設定中..."
+cat > .env <<'EOF'
+MYSQL_ROOT_PASSWORD=password
+MYSQL_DATABASE=app_development
+
+DATABASE_HOST=db
+DATABASE_USERNAME=root
+DATABASE_PASSWORD=password
+
+RAILS_ENV=development
+EOF
+
+# --- 2. Gemfileの編集 ---
+echo "[3/10] Gemfile を設定中..."
+cat > Gemfile <<'EOF'
+source "https://rubygems.org"
+ruby "3.2.0"
+
+gem "rails", "~> 7.1.5"
+gem "mysql2", "~> 0.5"
+gem "puma", ">= 5.0"
+
+gem "bootsnap", require: false
+
+group :development do
+  gem "web-console"
+end
+
+group :development, :test do
+  gem "debug"
+end
+EOF
+# Gemfile.lockはtouchで作成済み（空ファイル）
+
+# --- 3. Dockerfileの編集 ---
+echo "[4/10] Dockerfile を設定中..."
+cat > Dockerfile <<'EOF'
+FROM ruby:3.2.0
+# nodejsとmysqlのインストール
+RUN apt-get update -qq && \
+    apt-get install -y nodejs default-mysql-client
+# applicationの作業ディレクトリ設定
+WORKDIR /app
+# とりあえずbundle install(そのためにGemfileだけコピー)
+COPY Gemfile Gemfile.lock ./
+RUN bundle install
+# 全部コピー
+COPY . .
+# ポート3000を使用
+EXPOSE 3000
+# (注: 最終的なCMDはRails new後に調整される可能性があるが、一旦設定)
+CMD ["./bin/rails", "server", "-b", "0.0.0.0"]
+EOF
+
+# --- 4. docker-compose.ymlの編集 ---
+echo "[5/10] docker-compose.yml を設定中..."
+cat > docker-compose.yml <<'EOF'
+version: '3.8'
+services:
+  db:
+    image: mysql:8.0
+    volumes:
+      - db-data:/var/lib/mysql
+    env_file: .env
+    # MySQL8.0ではデフォルト認証方式が変わったため、旧方式を指定
+    command: --default-authentication-plugin=mysql_native_password
+    # 環境変数を直接渡すことも可能（.envと重複するが、明示的に）
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+  web:
+    build: .
+    volumes:
+      - .:/app
+      # (オプション) bundle installしたgemを永続化する場合
+      # - bundle_cache:/usr/local/bundle/
+    ports:
+      - '3000:3000'
+    depends_on:
+      - db
+    env_file: .env
+    # (オプション) コンテナを起動し続けるための設定
+    # stdin_open: true
+    # tty: true
+volumes:
+  db-data:
+  # (オプション) bundle installしたgemを永続化する場合
+  # bundle_cache:
+EOF
+
+# --- 5. docker build (初回) ---
+echo "[6/10] 初回 Docker イメージをビルド中 (Gemfileの依存関係解決)..."
+docker compose build web # webサービスのみビルドでOK
+
+# --- 6. Railsの初期化 ---
+echo "[7/10] Rails アプリケーションを初期化中 (rails new)..."
+# --skip-bundle オプションを追加して、コンテナ内でのbundle installをスキップ（既にbuild時に実行済みのため）
+# rails newが Gemfile を上書きするので注意（上書き後に再度buildが必要）
+docker compose run --rm web rails new . --force --database=mysql --skip-bundle
+
+# --- 7. database.ymlの編集 ---
+echo "[8/10] config/database.yml を設定中..."
+# rails new によって生成された database.yml を上書き
+cat > config/database.yml <<'EOF'
+# MySQL. Versions 5.5.8 and up are supported.
+#
+# Install the MySQL driver
+#   gem install mysql2
+#
+# Ensure the MySQL gem is defined in your Gemfile
+#   gem "mysql2"
+#
+# And be sure to use new-style password hashing:
+#   <https://dev.mysql.com/doc/refman/5.7/en/password-hashing.html>
+#
+default: &default
+  adapter: mysql2
+  encoding: utf8mb4
+  pool: <%= ENV.fetch("RAILS_MAX_THREADS") { 5 } %>
+  username: <%= ENV.fetch("DATABASE_USERNAME", "root") %>
+  password: <%= ENV.fetch("DATABASE_PASSWORD", "") %>
+  host: <%= ENV.fetch("DATABASE_HOST", "db") %>
+  port: 3306
+
+development:
+  <<: *default
+  database: <%= ENV.fetch("MYSQL_DATABASE", "app_development") %>
+
+# Warning: The database defined as "test" will be erased and
+# re-generated from your development database when you run "rake".
+# Do not set this db to the same as development or production.
+test:
+  <<: *default
+  # テストDB名は固定にするか、環境変数で指定する方が一般的
+  # database: <%= ENV.fetch("MYSQL_DATABASE", "app_development") %>_test
+  database: app_test
+
+# As with config/credentials.yml, you never want to store sensitive information,
+# like your database password, in your source code. If your source code is
+# ever seen by anyone, they now have access to your database.
+#
+# Instead, provide the password or a full connection URL as an environment
+# variable when you boot the app. For example:
+#
+#   DATABASE_URL="mysql2://myuser:mypass@localhost/somedatabase"
+#
+# If the connection URL is provided in the special DATABASE_URL environment
+# variable, Rails will automatically merge its configuration values on top of
+# the values provided in this file. Alternatively, you can specify a connection
+# URL environment variable explicitly:
+#
+#   production:
+#     url: <%= ENV["MY_APP_DATABASE_URL"] %>
+#
+# Read <https://guides.rubyonrails.org/configuring.html#configuring-a-database>
+# for a full overview on how database connection configuration can be specified.
+#
+production:
+  <<: *default
+  database: app_production
+  # 本番環境のユーザー名/パスワードは環境変数で設定することを強く推奨
+  # username: app
+  # password: <%= ENV["APP_DATABASE_PASSWORD"] %>
+EOF
+
+# --- 8. Dockerfileの最終行の修正 (確認) ---
+# Note: ステップ3で作成したDockerfileのCMDは既に正しい形式 `CMD ["./bin/rails", "server", "-b", "0.0.0.0"]` です。
+# rails new コマンドはこの行を通常変更しないため、再編集は不要です。
+# もし `rails new` が CMD を変更するような特殊なケースがあれば、ここで再度 cat などで上書きしてください。
+echo "[*] Dockerfile の CMD はステップ4で設定済みのため、修正はスキップします。"
+
+# --- 9. リビルド ---
+echo "[9/10] Rails アプリケーションファイルを含めて Docker イメージを再ビルド中..."
+# rails new で Gemfile などが更新された可能性があるため再ビルド
+docker compose build
+
+# --- 10. データベースの作成 ---
+echo "[10/10] データベースを作成中 (db:create)..."
+# dbサービスが起動するまで少し待つ（必要に応じて）
+# sleep 5
+docker compose run --rm web bin/rails db:create
+
+echo "--- Rails Docker環境構築完了 ---"
+echo ""
+echo "以下のコマンドでサーバーを起動できます:"
+echo "  docker compose up"
+echo ""
+echo "必要に応じて、マイグレーションなどを実行してください:"
+echo "  docker compose run --rm web bin/rails db:migrate"
