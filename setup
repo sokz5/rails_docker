@@ -74,41 +74,28 @@ services:
     volumes:
       - db-data:/var/lib/mysql
     env_file: .env
-    # MySQL8.0ではデフォルト認証方式が変わったため、旧方式を指定
-    command: --default-authentication-plugin=mysql_native_password
-    # 環境変数を直接渡すことも可能（.envと重複するが、明示的に）
-    environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-      MYSQL_DATABASE: ${MYSQL_DATABASE}
   web:
     build: .
     volumes:
       - .:/app
-      # (オプション) bundle installしたgemを永続化する場合
-      # - bundle_cache:/usr/local/bundle/
     ports:
       - '3000:3000'
     depends_on:
       - db
     env_file: .env
-    # (オプション) コンテナを起動し続けるための設定
-    # stdin_open: true
-    # tty: true
 volumes:
   db-data:
-  # (オプション) bundle installしたgemを永続化する場合
-  # bundle_cache:
 EOF
 
 # --- 5. docker build (初回) ---
 echo "[6/10] 初回 Docker イメージをビルド中 (Gemfileの依存関係解決)..."
-docker compose build web # webサービスのみビルドでOK
+docker compose build
 
 # --- 6. Railsの初期化 ---
 echo "[7/10] Rails アプリケーションを初期化中 (rails new)..."
 # --skip-bundle オプションを追加して、コンテナ内でのbundle installをスキップ（既にbuild時に実行済みのため）
 # rails newが Gemfile を上書きするので注意（上書き後に再度buildが必要）
-docker compose run --rm web rails new . --force --database=mysql --skip-bundle
+docker compose run --rm web rails new . --force --database=mysql
 
 # --- 7. database.ymlの編集 ---
 echo "[8/10] config/database.yml を設定中..."
