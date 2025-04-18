@@ -180,31 +180,33 @@ echo "[*] Dockerfile の最終行 (CMD) を確認・修正中..."
 # 期待する最終行のCMDコマンド
 target_cmd='CMD ["./bin/rails", "server", "-b", "0.0.0.0"]'
 # 現在のDockerfileの最終行を取得
-# Note: ファイルが存在しない、または空の場合はエラーになる可能性があるが、
-# このスクリプトの流れでは既にDockerfileが作成されているはず。
-last_line=$(tail -n 1 Dockerfile)
-# 一時ファイル名
-temp_dockerfile="Dockerfile.tmp"
-
-# 最終行が期待するCMDと異なるか比較
-if [[ "$last_line" != "$target_cmd" ]]; then
-  echo "  -> Dockerfile の最終行が期待値と異なります。修正します。"
-  echo "     期待値: $target_cmd"
-  echo "     現在値: $last_line"
-
-  # 最終行以外を一時ファイルにコピー (head -n -1 は最終行を除いた行数を取得)
-  head -n -1 Dockerfile > "$temp_dockerfile"
-
-  # 正しい最終行を一時ファイルに追加
-  echo "$target_cmd" >> "$temp_dockerfile"
-
-  # 一時ファイルを元のファイル名に置き換え
-  mv "$temp_dockerfile" Dockerfile
-  echo "  -> Dockerfile を修正しました。"
+# tail実行前にファイルが存在するか確認する方がより堅牢
+if [[ ! -f Dockerfile ]] || [[ ! -s Dockerfile ]]; then
+  echo "  -> エラー: Dockerfile が存在しないか空です。処理をスキップします。"
+  # 必要に応じてここでスクリプトを終了させる (exit 1) か、次のステップに進む
 else
-  # 最終行が既に正しい場合
-  echo "  -> Dockerfile の最終行は既に正しい形式です。修正は不要です。"
+  last_line=$(tail -n 1 Dockerfile)
+
+  # 最終行が期待するCMDと異なるか比較
+  if [[ "$last_line" != "$target_cmd" ]]; then
+    echo "  -> Dockerfile の最終行が期待値と異なります。修正します。"
+    echo "     期待値: $target_cmd"
+    echo "     現在値: $last_line"
+
+    # sed -i を使って最終行を直接置換 (GNU/BSD互換狙い、バックアップなし)
+    # '$' で最終行を指定し、's|.*|...|' で行全体を置換。区切り文字に'|'を使用。
+    # 変数展開が正しく行われるようにクォーテーションに注意
+    sed -i '' '$ s|.*|'"$target_cmd"'|' Dockerfile
+    # GNU sed の場合、 -i'' がエラーになる可能性があれば -i のみ試す必要あり
+    # 例: sed -i '$ s|.*|'"$target_cmd"'|' Dockerfile (GNU)
+
+    echo "  -> Dockerfile を修正しました。"
+  else
+    # 最終行が既に正しい場合
+    echo "  -> Dockerfile の最終行は既に正しい形式です。修正は不要です。"
+  fi
 fi
+
 
 # --- 9. リビルド ---
 echo "[9/10] Rails アプリケーションファイルを含めて Docker イメージを再ビルド中..."
