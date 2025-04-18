@@ -42,25 +42,25 @@ group :development, :test do
   gem "debug"
 end
 EOF
-# Gemfile.lockはtouchで作成済み（空ファイル）
+
 
 # --- 3. Dockerfileの編集 ---
 echo "[4/10] Dockerfile を設定中..."
 cat > Dockerfile <<'EOF'
 FROM ruby:3.2.0
-# nodejsとmysqlのインストール
+
 RUN apt-get update -qq && \
     apt-get install -y nodejs default-mysql-client
-# applicationの作業ディレクトリ設定
+
 WORKDIR /app
-# とりあえずbundle install(そのためにGemfileだけコピー)
+
 COPY Gemfile Gemfile.lock ./
 RUN bundle install
-# 全部コピー
+
 COPY . .
-# ポート3000を使用
+
 EXPOSE 3000
-# (注: 最終的なCMDはRails new後に調整される可能性があるが、一旦設定)
+
 CMD ["./bin/rails", "server", "-b", "0.0.0.0"]
 EOF
 
@@ -169,8 +169,6 @@ target_cmd='CMD ["./bin/rails", "server", "-b", "0.0.0.0"]'
 
 # Dockerfile が存在するか確認
 if [[ -f Dockerfile ]]; then
-  # ファイルが存在する場合
-
   # ファイルが空でないか確認してから最終行を削除
   if [[ -s Dockerfile ]]; then
     echo "  -> 現在の最終行を削除しています..."
@@ -180,7 +178,6 @@ if [[ -f Dockerfile ]]; then
     echo "  -> Dockerfile は空です。最終行の削除はスキップします。"
   fi
 
-  # 正しい最終行を追記
   echo "  -> 正しい CMD 行を追記しています..."
   echo "$target_cmd" >> Dockerfile
   echo "  -> Dockerfile の最終行を '$target_cmd' に設定しました。"
@@ -188,9 +185,8 @@ if [[ -f Dockerfile ]]; then
 else
   # Dockerfileが存在しない場合（通常はありえないはずだが念のため）
   echo "  -> エラー: Dockerfile が存在しません。処理をスキップします。"
-  # 必要に応じてここでスクリプトを終了させる (exit 1)
+  exit 1
 fi
-
 
 
 # --- 9. リビルド ---
@@ -200,8 +196,6 @@ docker compose build
 
 # --- 10. データベースの作成 ---
 echo "[10/10] データベースを作成中 (db:create)..."
-# dbサービスが起動するまで少し待つ（必要に応じて）
-# sleep 5
 docker compose run --rm web bin/rails db:create
 
 echo "--- Rails Docker環境構築完了 ---"
